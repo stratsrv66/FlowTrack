@@ -1,0 +1,394 @@
+// FlowTrack - Prisma Schema
+// Production-ready schema with indexes, soft deletes, and full relations
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum ProjectRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum IssuePriority {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  NONE
+}
+
+enum IssueType {
+  BUG
+  FEATURE
+  TASK
+  IMPROVEMENT
+  EPIC
+  SUBTASK
+}
+
+enum NotificationType {
+  ISSUE_ASSIGNED
+  ISSUE_UPDATED
+  COMMENT_ADDED
+  MENTION
+  STATUS_CHANGED
+  DUE_DATE_APPROACHING
+}
+
+enum ActivityAction {
+  CREATED
+  UPDATED
+  DELETED
+  STATUS_CHANGED
+  ASSIGNED
+  UNASSIGNED
+  COMMENTED
+  LABEL_ADDED
+  LABEL_REMOVED
+  PRIORITY_CHANGED
+  TYPE_CHANGED
+  TITLE_CHANGED
+  DESCRIPTION_CHANGED
+  DUE_DATE_CHANGED
+  ATTACHMENT_ADDED
+}
+
+// ==========================================
+// USER
+// ==========================================
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  username       String    @unique
+  displayName    String
+  passwordHash   String
+  avatarUrl      String?
+  bio            String?
+  role           UserRole  @default(MEMBER)
+  isActive       Boolean   @default(true)
+  lastSeenAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  // Relations
+  memberships         ProjectMember[]
+  assignedIssues      Issue[]         @relation("IssueAssignee")
+  reportedIssues      Issue[]         @relation("IssueReporter")
+  comments            Comment[]
+  notifications       Notification[]  @relation("NotificationRecipient")
+  activityLogs        ActivityLog[]   @relation("ActivityActor")
+  refreshTokens       RefreshToken[]
+  mentionedIn         Comment[]       @relation("CommentMentions")
+  mentionedInIssues   Issue[]         @relation("IssueMentions")
+
+  @@index([email])
+  @@index([username])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// ==========================================
+// REFRESH TOKEN
+// ==========================================
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ==========================================
+// PROJECT
+// ==========================================
+
+model Project {
+  id          String    @id @default(uuid())
+  name        String
+  key         String    @unique // e.g., "FT", "PROJ" — used in issue keys
+  description String?
+  iconUrl     String?
+  isArchived  Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  // Relations
+  members    ProjectMember[]
+  issues     Issue[]
+  statuses   IssueStatus[]
+  labels     Label[]
+  workflows  Workflow[]
+  activities ActivityLog[]
+
+  @@index([key])
+  @@index([deletedAt])
+  @@map("projects")
+}
+
+// ==========================================
+// PROJECT MEMBER
+// ==========================================
+
+model ProjectMember {
+  id        String      @id @default(uuid())
+  projectId String
+  userId    String
+  role      ProjectRole @default(MEMBER)
+  joinedAt  DateTime    @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+// ==========================================
+// ISSUE STATUS (per project, configurable)
+// ==========================================
+
+model IssueStatus {
+  id         String  @id @default(uuid())
+  projectId  String
+  name       String
+  color      String  @default("#6B7280")
+  position   Int     @default(0)
+  isDefault  Boolean @default(false)
+  isFinal    Boolean @default(false) // terminal state (Done, Cancelled)
+
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  issues     Issue[]
+  fromTrans  WorkflowTransition[] @relation("FromStatus")
+  toTrans    WorkflowTransition[] @relation("ToStatus")
+
+  @@unique([projectId, name])
+  @@index([projectId])
+  @@map("issue_statuses")
+}
+
+// ==========================================
+// WORKFLOW
+// ==========================================
+
+model Workflow {
+  id          String   @id @default(uuid())
+  projectId   String
+  name        String
+  description String?
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  transitions WorkflowTransition[]
+
+  @@index([projectId])
+  @@map("workflows")
+}
+
+model WorkflowTransition {
+  id           String @id @default(uuid())
+  workflowId   String
+  fromStatusId String
+  toStatusId   String
+  name         String // e.g., "Start Progress", "Resolve"
+
+  workflow     Workflow    @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  fromStatus   IssueStatus @relation("FromStatus", fields: [fromStatusId], references: [id])
+  toStatus     IssueStatus @relation("ToStatus", fields: [toStatusId], references: [id])
+
+  @@unique([workflowId, fromStatusId, toStatusId])
+  @@index([workflowId])
+  @@map("workflow_transitions")
+}
+
+// ==========================================
+// LABEL
+// ==========================================
+
+model Label {
+  id        String  @id @default(uuid())
+  projectId String
+  name      String
+  color     String  @default("#3B82F6")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  issues  IssueLabel[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+  @@map("labels")
+}
+
+// ==========================================
+// ISSUE
+// ==========================================
+
+model Issue {
+  id          String        @id @default(uuid())
+  key         String        @unique // e.g., FT-42
+  title       String
+  description String?
+  type        IssueType     @default(TASK)
+  priority    IssuePriority @default(MEDIUM)
+  position    Float         @default(0) // for ordering within status columns
+
+  projectId   String
+  statusId    String
+  assigneeId  String?
+  reporterId  String
+  parentId    String?       // for subtasks / epics
+  dueDate     DateTime?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime? // soft delete
+
+  // Relations
+  project    Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status     IssueStatus  @relation(fields: [statusId], references: [id])
+  assignee   User?        @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  reporter   User         @relation("IssueReporter", fields: [reporterId], references: [id])
+  parent     Issue?       @relation("IssueHierarchy", fields: [parentId], references: [id])
+  children   Issue[]      @relation("IssueHierarchy")
+  labels     IssueLabel[]
+  comments   Comment[]
+  activities ActivityLog[]
+  notifications Notification[]
+  mentions   User[]        @relation("IssueMentions")
+
+  @@index([projectId])
+  @@index([statusId])
+  @@index([assigneeId])
+  @@index([reporterId])
+  @@index([parentId])
+  @@index([deletedAt])
+  @@index([projectId, deletedAt]) // composite for project issue list queries
+  @@map("issues")
+}
+
+// ==========================================
+// ISSUE LABEL (join table)
+// ==========================================
+
+model IssueLabel {
+  issueId String
+  labelId String
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, labelId])
+  @@map("issue_labels")
+}
+
+// ==========================================
+// COMMENT
+// ==========================================
+
+model Comment {
+  id        String    @id @default(uuid())
+  body      String
+  issueId   String
+  authorId  String
+  parentId  String?   // threaded replies
+  isEdited  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id])
+  parent    Comment?  @relation("CommentThread", fields: [parentId], references: [id])
+  replies   Comment[] @relation("CommentThread")
+  mentions  User[]    @relation("CommentMentions")
+
+  @@index([issueId])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([deletedAt])
+  @@map("comments")
+}
+
+// ==========================================
+// NOTIFICATION
+// ==========================================
+
+model Notification {
+  id        String           @id @default(uuid())
+  type      NotificationType
+  title     String
+  body      String
+  isRead    Boolean          @default(false)
+  userId    String           // recipient
+  issueId   String?
+  actorId   String?          // who triggered the notification
+  metadata  Json?            // flexible extra data
+  createdAt DateTime         @default(now())
+  readAt    DateTime?
+
+  user  User   @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  issue Issue? @relation(fields: [issueId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// ==========================================
+// ACTIVITY LOG
+// ==========================================
+
+model ActivityLog {
+  id         String         @id @default(uuid())
+  action     ActivityAction
+  entityType String         // "issue", "comment", "project"
+  entityId   String
+  actorId    String
+  projectId  String?
+  issueId    String?
+  metadata   Json?          // stores old/new values for diffs
+  createdAt  DateTime       @default(now())
+
+  actor   User     @relation("ActivityActor", fields: [actorId], references: [id])
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  issue   Issue?   @relation(fields: [issueId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([projectId])
+  @@index([issueId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}

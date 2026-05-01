@@ -1,0 +1,99 @@
+version: '3.9'
+
+services:
+  # ==========================================
+  # API Server
+  # ==========================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: flowtrack-api
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-flowtrack}:${POSTGRES_PASSWORD:-flowtrack_secret}@postgres:5432/${POSTGRES_DB:-flowtrack_db}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - flowtrack-network
+    volumes:
+      - ./prisma:/app/prisma
+
+  # ==========================================
+  # PostgreSQL
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: flowtrack-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flowtrack}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowtrack_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-flowtrack_db}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-flowtrack} -d ${POSTGRES_DB:-flowtrack_db}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flowtrack-network
+
+  # ==========================================
+  # Redis
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: flowtrack-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flowtrack-network
+
+  # ==========================================
+  # Redis Commander (Dev only)
+  # ==========================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: flowtrack-redis-ui
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - '8081:8081'
+    depends_on:
+      - redis
+    networks:
+      - flowtrack-network
+    profiles:
+      - dev
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  flowtrack-network:
+    driver: bridge

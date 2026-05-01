@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(head -30 node_modules/keyv/dist/index.d.ts)",
+      "Bash(head -30 node_modules/keyv/dist/index.d.cts)"
+    ]
+  }
+}
